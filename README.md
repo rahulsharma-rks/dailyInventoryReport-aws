@@ -32,8 +32,6 @@ This solution provides automated daily email reports of all AWS resources in you
    # For Linux/Mac users
    nano deploy.sh
    
-   # For Windows users
-   notepad deploy.bat
    ```
 
 2. **Set your email address**:
@@ -47,8 +45,6 @@ This solution provides automated daily email reports of all AWS resources in you
    chmod +x deploy.sh
    ./deploy.sh
    
-   # Windows
-   deploy.bat
    ```
 
 ### Option 2: Manual Deployment
@@ -188,7 +184,3 @@ For issues or questions:
 2. Verify AWS Config and CloudTrail are properly configured
 3. Ensure all IAM permissions are correctly set
 4. Review the CloudFormation stack events for deployment issues
-
-## License
-
-This solution is provided as-is for educational and operational purposes. Modify as needed for your specific requirements.
