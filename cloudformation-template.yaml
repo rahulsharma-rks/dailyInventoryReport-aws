@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Resource Monitoring Automation - Daily Email Reports'
+
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: Email address to receive daily reports
+    AllowedPattern: '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+  
+  ReportTime:
+    Type: String
+    Default: '10:00'
+    Description: Time to send daily report (24-hour format, UTC)
+    AllowedPattern: '^([01]?[0-9]|2[0-3]):[0-5][0-9]$'
+
+Resources:
+  # S3 Bucket for storing reports
+  ReportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-resource-reports-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldReports
+            Status: Enabled
+            ExpirationInDays: 90
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # IAM Role for Lambda
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ResourceMonitoringPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - config:SelectResourceConfig
+                  - config:GetResourceConfigHistory
+                  - config:ListDiscoveredResources
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudtrail:LookupEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeImages
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSubnets
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - lambda:GetFunction
+                  - lambda:ListFunctions
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                  - iam:ListUsers
+                  - iam:ListRoles
+                  - iam:ListPolicies
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${ReportBucket}/*'
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  # Lambda Layer for dependencies
+  PythonDependenciesLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-python-dependencies'
+      Description: 'Python dependencies for resource monitoring'
+      Content:
+        S3Bucket: !Ref ReportBucket
+        S3Key: 'layers/python-dependencies.zip'
+      CompatibleRuntimes:
+        - python3.9
+        - python3.10
+        - python3.11
+
+  # Lambda Function
+  ResourceMonitoringFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-resource-monitor'
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 900
+      MemorySize: 512
+      Environment:
+        Variables:
+          REPORT_S3_BUCKET: !Ref ReportBucket
+          EMAIL_FROM: !Ref EmailAddress
+          EMAIL_TO: !Ref EmailAddress
+      Layers:
+        - !Ref PythonDependenciesLayer
+      Code:
+        ZipFile: |
+          # Placeholder - will be updated with actual code
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Function created successfully'}
+
+  # EventBridge Rule for daily scheduling
+  DailyScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${AWS::StackName}-daily-report'
+      Description: 'Trigger daily AWS resource report'
+      ScheduleExpression: !Sub 'cron(${ReportTime} * * ? *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ResourceMonitoringFunction.Arn
+          Id: 'ResourceMonitoringTarget'
+
+  # Permission for EventBridge to invoke Lambda
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ResourceMonitoringFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyScheduleRule.Arn
+
+  # SNS Topic for notifications (optional)
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-notifications'
+      DisplayName: 'AWS Resource Monitoring Notifications'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref EmailAddress
+
+  # CloudWatch Log Group
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ResourceMonitoringFunction}'
+      RetentionInDays: 30
+
+Outputs:
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt ResourceMonitoringFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+
+  S3BucketName:
+    Description: 'Name of the S3 bucket storing reports'
+    Value: !Ref ReportBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+
+  EventBridgeRuleArn:
+    Description: 'ARN of the EventBridge rule'
+    Value: !GetAtt DailyScheduleRule.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ScheduleRuleArn'
+
+  SNSTopicArn:
+    Description: 'ARN of the SNS topic for notifications'
+    Value: !Ref NotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicArn'
